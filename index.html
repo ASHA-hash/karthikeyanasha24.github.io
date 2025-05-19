@@ -1,9 +1,8 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, minimum-scale=0.5, maximum-scale=2.0" />
   <title>MapLibre Interactive Map with State Borders</title>
   <link href="https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.css" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@700&display=swap" rel="stylesheet" />
@@ -174,7 +173,7 @@
         box-shadow: 0 8px 18px rgba(0, 0, 0, 0.7);
       }
       .overlay-text.mobile p {
-        font-size: 14px;
+        fontvdash: 14px;
         color: #CCCCCC;
         margin: 0;
         padding: 5px 10px;
@@ -279,7 +278,7 @@
     // Define regionView for mobile and laptop
     const mobileRegionView = {
       us: { center: [0, 0], zoom: 2.5, minZoom: 2.5 },
-      canada: { center: [-95, 70], zoom: 1.2, minZoom: 1.2 }, // Fixed latitude to 60 and adjusted zoom
+      canada: { center: [-95, 70], zoom: 1.2, minZoom: 1.2 },
       caribbean: { center: [-70, 15], zoom: 3.3, minZoom: 3.3 }
     };
 
@@ -442,7 +441,7 @@
       center: regionView.us.center,
       zoom: regionView.us.zoom,
       minZoom: regionView.us.minZoom,
-      dragPan: false
+      dragPan: isMobileDevice() ? true : false
     });
 
     map.on('load', () => {
