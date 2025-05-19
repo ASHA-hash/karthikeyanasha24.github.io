@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -213,7 +212,7 @@
   <div id="map"></div>
 
   <div class="overlay-text" id="map-sidebar">
-    <p id="location-name">Hover on HELLO your county</p>
+    <p id="location-name">Hover on your county</p>
     <h2 id="rep-name">Find a Representative</h2>
     <button class="sidebar-button" id="sidebar-button">Contact</button>
   </div>
@@ -278,15 +277,15 @@
 
     // Define regionView for mobile and laptop
     const mobileRegionView = {
-      us: { center: [0, 0], zoom: 2.5, minZoom: 2.5 },
-      canada: { center: [-95, 70], zoom: 1.2, minZoom: 1.2 }, // Fixed latitude to 60 and adjusted zoom
-      caribbean: { center: [-70, 15], zoom: 3.3, minZoom: 3.3 }
+      us: { center: [0, 0], zoom: 2.5, minZoom: 2.5, maxZoom: 5 },
+      canada: { center: [-95, 70], zoom: 1.2, minZoom: 1.2, maxZoom: 4 },
+      caribbean: { center: [-70, 15], zoom: 3.3, minZoom: 3.3, maxZoom: 6 }
     };
 
     const laptopRegionView = {
-      us: { center: [10, 0], zoom: 3.8, minZoom: 3.8 },
-      canada: { center: [-60, 72], zoom: 2, minZoom: 2 },
-      caribbean: { center: [-60, 18], zoom: 4.5, minZoom: 4.5 }
+      us: { center: [10, 0], zoom: 3.8, minZoom: 3.8, maxZoom: 8 },
+      canada: { center: [-60, 72], zoom: 2, minZoom: 2, maxZoom: 6 },
+      caribbean: { center: [-60, 18], zoom: 4.5, minZoom: 4.5, maxZoom: 8 }
     };
 
     // Select regionView based on device type
@@ -442,8 +441,14 @@
       center: regionView.us.center,
       zoom: regionView.us.zoom,
       minZoom: regionView.us.minZoom,
-      dragPan: false
+      maxZoom: regionView.us.maxZoom
     });
+
+    // Enable touch zooming on mobile devices
+    if (isMobileDevice()) {
+      map.touchZoomRotate.enable();
+      map.dragPan.disable(); // Prevent panning, allow zooming
+    }
 
     map.on('load', () => {
       map.setCenter(regionView[currentRegion].center);
@@ -471,7 +476,7 @@
         locationName.textContent = isMobileDevice() ? 'Tap on a county' : 'Hover on your county';
         repName.textContent = 'Find a Representative';
         sidebarButton.style.display = 'none';
-        geojson.features.forEach((f, i) => {
+        geojson?.features.forEach((f, i) => {
           map.setFeatureState({ source: 'counties', id: i }, { hover: false });
         });
       }
@@ -623,11 +628,7 @@
       if (currentRegion !== 'caribbean') document.getElementById('caribbean-btn').classList.add('inactive');
 
       map.setMinZoom(regionView[currentRegion].minZoom);
-      if (regionView[currentRegion].maxZoom) {
-        map.setMaxZoom(regionView[currentRegion].maxZoom);
-      } else {
-        map.setMaxZoom(20);
-      }
+      map.setMaxZoom(regionView[currentRegion].maxZoom);
 
       // Validate center coordinates before jumping
       const center = regionView[currentRegion].center;
@@ -728,7 +729,7 @@
 
       loadGeoJSON
         .then((data) => {
-          geojson = data;
+          geojson = JSON.parse(JSON.stringify(data)); // Deep copy to avoid mutating cached data
           const bounds = new maplibregl.LngLatBounds();
 
           if (region === 'caribbean') {
@@ -746,6 +747,7 @@
 
             if (region === 'us') {
               try {
+                feature.geometry = transformCoordinates(feature.geometry, feature.properties.REGION_COD);
                 feature.geometry.coordinates = convertWebMercatorToWGS84(geometry.coordinates, geometry.type);
               } catch (err) {
                 console.warn(`Error converting coordinates for feature ${feature.properties.NAME || 'Unknown'}: ${err.message}`);
@@ -849,6 +851,7 @@
                   }
 
                   try {
+                    feature.geometry = transformCoordinates(feature.geometry, statefp);
                     feature.geometry.coordinates = convertWebMercatorToWGS84(geometry.coordinates, geometry.type);
                   } catch (err) {
                     console.warn(`Error converting coordinates for state ${feature.properties.NAME || 'Unknown'}: ${err.message}`);
@@ -890,6 +893,9 @@
           } else {
             addCountyLayers(region);
           }
+
+          // Force map to render after adding layers
+          map.triggerRepaint();
         })
         .catch(err => {
           console.error(`Error loading region ${region}:`, err);
