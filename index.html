@@ -262,7 +262,9 @@
     const countyToAdm2Map = new Map();
     let selectedCountyId = null;
     let isHoverEnabled = true;
-    const geojsonCache = new Map();
+    let tapCount = 0;
+    let lastTapTime = 0;
+    const doubleTapDelay = 300;
 
     const regionSources = {
       us: 'counties.geojson',
@@ -290,6 +292,11 @@
 
     // Select regionView based on device type
     const regionView = isMobileDevice() ? mobileRegionView : laptopRegionView;
+
+    function isMobileDevice() {
+      return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+             ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+    }
 
     const regionInitialColors = {
       us: '#4A4A4A',
@@ -333,27 +340,13 @@
       return parts.map(part => part.replace(/^"|"$/g, '').trim());
     }
 
-    function isMobileDevice() {
-      return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
-             ('ontouchstart' in window || navigator.maxTouchPoints > 0);
-    }
-
-    // Update overlay text based on device
-    document.addEventListener('DOMContentLoaded', () => {
-      const overlayText = document.getElementById('map-sidebar');
-      if (isMobileDevice()) {
-        overlayText.classList.add('mobile');
-        document.getElementById('location-name').textContent = 'Tap on a county';
-      }
-    });
-
+    // Fetch counties.geojson and Zip_Code_County_Assignments.csv, then load the initial region
     fetch('counties.geojson')
       .then(res => {
         if (!res.ok) throw new Error('Failed to fetch counties.geojson for mapping');
         return res.json();
       })
       .then(geojson => {
-        geojsonCache.set('counties.geojson', geojson);
         geojson.features.forEach(feature => {
           const stateCode = feature.properties.REGION_COD;
           const countyName = feature.properties.NAME.toLowerCase().replace(/ county$/, '').replace(/ city$/, '').replace(/ borough$/, '').replace(/ census area$/, '').replace(/ and$/, '').trim();
@@ -400,6 +393,12 @@
             repMap.set("USA-51678", "MCQ-WBS");
             repMap.set("USA-51595", "MCQ-WBS");
             repMap.set("USA-29510", "GIE Ltd.");
+          })
+          .then(() => {
+            // Set initial map view and load the region after data is fetched
+            map.setCenter(regionView[currentRegion].center);
+            map.setZoom(regionView[currentRegion].zoom);
+            loadRegion(currentRegion);
           });
       })
       .catch(err => {
@@ -440,52 +439,129 @@
       style: darkStyle,
       center: regionView.us.center,
       zoom: regionView.us.zoom,
-      minZoom: regionView.us.minZoom,
-      maxZoom: regionView.us.maxZoom
+      minZoom: regionView.us.minZoom
     });
 
-    // Enable touch zooming on mobile devices
-    if (isMobileDevice()) {
-      map.touchZoomRotate.enable();
-      map.dragPan.disable(); // Prevent panning, allow zooming
-    }
-
     map.on('load', () => {
-      map.setCenter(regionView[currentRegion].center);
-      map.setZoom(regionView[currentRegion].zoom);
-      loadRegion(currentRegion);
-
       const sidebar = document.getElementById('map-sidebar');
       const locationName = document.getElementById('location-name');
       const repName = document.getElementById('rep-name');
       const sidebarButton = document.getElementById('sidebar-button');
 
-      function updateCountyInfo(feature) {
-        const countyName = feature.properties.NAME?.toLowerCase().replace(/ county$/, '').replace(/ city$/, '').replace(/ parish$/, '').trim();
-        const geoId = currentRegion === 'us' ? feature.properties.ADM2_CODE : feature.properties.NAME;
-        const rep = currentRegion === 'us' ? repMap.get(geoId) || 'N/A' : regionReps[currentRegion];
-        const displayName = feature.properties.NAME || currentRegion.toUpperCase();
+      // Prevent default zoom on double-tap or double-click
+      map.on('dblclick', (e) => {
+        e.preventDefault(); // Prevent default zoom behavior
+      });
 
-        console.log(`Updating info for feature: ${displayName}, GeoID: ${geoId}, Rep: ${rep}`);
-        locationName.textContent = displayName;
-        repName.textContent = rep || regionReps[currentRegion] || 'N/A';
-        sidebarButton.style.display = 'block';
-      }
+      // Handle mouse interactions for non-mobile devices
+      if (!isMobileDevice()) {
+        map.on('mousemove', 'counties-fill', (e) => {
+          if (!map.getSource('counties') || !geojson || !isHoverEnabled) {
+            console.warn('Hover disabled or no counties source/geojson available');
+            return;
+          }
+          map.getCanvas().style.cursor = 'pointer';
+          const feature = e.features[0];
+          const countyName = feature.properties.NAME?.toLowerCase().replace(/ county$/, '').replace(/ city$/, '').replace(/ parish$/, '').trim();
+          const geoId = currentRegion === 'us' ? feature.properties.ADM2_CODE : feature.properties.NAME;
+          const rep = currentRegion === 'us' ? repMap.get(geoId) || 'N/A' : regionReps[currentRegion];
+          const displayName = feature.properties.NAME || currentRegion.toUpperCase();
 
-      function resetCountyInfo() {
-        locationName.textContent = isMobileDevice() ? 'Tap on a county' : 'Hover on your county';
-        repName.textContent = 'Find a Representative';
-        sidebarButton.style.display = 'none';
-        geojson?.features.forEach((f, i) => {
-          map.setFeatureState({ source: 'counties', id: i }, { hover: false });
+          locationName.textContent = displayName;
+          repName.textContent = rep || regionReps[currentRegion] || 'N/A';
+          sidebarButton.style.display = 'block';
+
+          console.log(`Hovering over ${displayName}, GeoID: ${geoId}, Rep: ${rep}, Color: ${repColorMap.get(rep) || regionInitialColors[currentRegion]}, Feature ID: ${feature.id}`);
+
+          if (currentRegion === 'us') {
+            repToCountyIds.forEach((ids, repKey) => {
+              ids.forEach(id => {
+                const isHover = repKey === rep;
+                map.setFeatureState({ source: 'counties', id }, { hover: isHover });
+                console.log(`Setting feature ${id} hover state to ${isHover} for rep ${repKey}`);
+              });
+            });
+          } else {
+            geojson.features.forEach((f, i) => {
+              map.setFeatureState({ source: 'counties', id: i }, { hover: true });
+              console.log(`Setting non-US feature ${i} hover state to true for ${regionReps[currentRegion]}`);
+            });
+          }
         });
-      }
 
-      let tapCount = 0;
-      let lastTapTime = 0;
-      const doubleTapDelay = 300;
+        map.on('mouseleave', 'counties-fill', () => {
+          if (!isHoverEnabled) return;
+          map.getCanvas().style.cursor = '';
+          locationName.textContent = 'Hover on your county';
+          repName.textContent = 'Find a Representative';
+          sidebarButton.style.display = 'none';
 
-      if (isMobileDevice()) {
+          if (geojson) {
+            geojson.features.forEach((f, i) => {
+              map.setFeatureState({ source: 'counties', id: i }, { hover: false });
+              console.log(`Resetting feature ${i} hover state to false`);
+            });
+          }
+        });
+
+        map.on('click', 'counties-fill', (e) => {
+          if (!map.getSource('counties') || !geojson) {
+            console.warn('No counties source or geojson available');
+            return;
+          }
+          const feature = e.features[0];
+          const featureId = feature.id;
+          const countyName = feature.properties.NAME?.toLowerCase().replace(/ county$/, '').replace(/ city$/, '').replace(/ parish$/, '').trim();
+          const geoId = currentRegion === 'us' ? feature.properties.ADM2_CODE : feature.properties.NAME;
+          const rep = currentRegion === 'us' ? repMap.get(geoId) || 'N/A' : regionReps[currentRegion];
+          const displayName = feature.properties.NAME || currentRegion.toUpperCase();
+
+          if (selectedCountyId === featureId) {
+            // Clicking the same county again: revert to hover mode
+            isHoverEnabled = true;
+            selectedCountyId = null;
+            locationName.textContent = 'Hover on your county';
+            repName.textContent = 'Find a Representative';
+            sidebarButton.style.display = 'none';
+            geojson.features.forEach((f, i) => {
+              map.setFeatureState({ source: 'counties', id: i }, { hover: false });
+            });
+            console.log(`Reverted to hover mode for ${displayName}`);
+          } else {
+            // New county clicked: lock selection
+            isHoverEnabled = false;
+            selectedCountyId = featureId;
+            locationName.textContent = displayName;
+            repName.textContent = rep || regionReps[currentRegion] || 'N/A';
+            sidebarButton.style.display = 'block';
+
+            geojson.features.forEach((f, i) => {
+              const fGeoId = currentRegion === 'us' ? f.properties.ADM2_CODE : f.properties.NAME;
+              const fRep = currentRegion === 'us' ? repMap.get(fGeoId) || 'N/A' : regionReps[currentRegion];
+              map.setFeatureState({ source: 'counties', id: i }, { hover: fRep === rep });
+              console.log(`Setting feature ${i} hover state to ${fRep === rep} for rep ${rep}`);
+            });
+            console.log(`Locked selection on ${displayName}, GeoID: ${geoId}, Rep: ${rep}`);
+          }
+        });
+
+        // Reset on click outside counties
+        map.on('click', (e) => {
+          const features = map.queryRenderedFeatures(e.point, { layers: ['counties-fill'] });
+          if (!features.length && !isMobileDevice()) {
+            console.log('Click outside counties, resetting');
+            isHoverEnabled = true;
+            selectedCountyId = null;
+            locationName.textContent = 'Hover on your county';
+            repName.textContent = 'Find a Representative';
+            sidebarButton.style.display = 'none';
+            geojson?.features.forEach((f, i) => {
+              map.setFeatureState({ source: 'counties', id: i }, { hover: false });
+            });
+          }
+        });
+      } else {
+        // Handle mobile devices
         map.on('touchstart', 'counties-fill', (e) => {
           if (!map.getSource('counties') || !geojson) {
             console.warn('No counties source or geojson available');
@@ -518,7 +594,14 @@
                 console.log('Single tap detected');
                 isHoverEnabled = false;
                 selectedCountyId = featureId;
-                updateCountyInfo(feature);
+                const countyName = feature.properties.NAME?.toLowerCase().replace(/ county$/, '').replace(/ city$/, '').replace(/ parish$/, '').trim();
+                const geoId = currentRegion === 'us' ? feature.properties.ADM2_CODE : feature.properties.NAME;
+                const rep = currentRegion === 'us' ? repMap.get(geoId) || 'N/A' : regionReps[currentRegion];
+                const displayName = feature.properties.NAME || currentRegion.toUpperCase();
+
+                locationName.textContent = displayName;
+                repName.textContent = rep || regionReps[currentRegion] || 'N/A';
+                sidebarButton.style.display = 'block';
 
                 geojson.features.forEach((f, i) => {
                   map.setFeatureState({ source: 'counties', id: i }, { hover: i === featureId });
@@ -531,10 +614,14 @@
             console.log('Double tap detected');
             isHoverEnabled = false;
             selectedCountyId = featureId;
+            const countyName = feature.properties.NAME?.toLowerCase().replace(/ county$/, '').replace(/ city$/, '').replace(/ parish$/, '').trim();
             const geoId = currentRegion === 'us' ? feature.properties.ADM2_CODE : feature.properties.NAME;
             const rep = currentRegion === 'us' ? repMap.get(geoId) || 'N/A' : regionReps[currentRegion];
+            const displayName = feature.properties.NAME || currentRegion.toUpperCase();
 
-            updateCountyInfo(feature);
+            locationName.textContent = displayName;
+            repName.textContent = rep || regionReps[currentRegion] || 'N/A';
+            sidebarButton.style.display = 'block';
 
             geojson.features.forEach((f, i) => {
               const fGeoId = currentRegion === 'us' ? f.properties.ADM2_CODE : f.properties.NAME;
@@ -552,67 +639,22 @@
             console.log('Touch outside counties, resetting');
             isHoverEnabled = true;
             selectedCountyId = null;
-            resetCountyInfo();
-          }
-        });
-      } else {
-        // Desktop behavior
-        map.on('click', 'counties-fill', (e) => {
-          if (!map.getSource('counties') || !geojson) {
-            console.warn('No counties source or geojson available');
-            return;
-          }
-
-          const feature = e.features[0];
-          const featureId = feature.id;
-
-          if (selectedCountyId === featureId) {
-            isHoverEnabled = true;
-            selectedCountyId = null;
-            resetCountyInfo();
-          } else {
-            isHoverEnabled = false;
-            selectedCountyId = featureId;
-            updateCountyInfo(feature);
-
-            geojson.features.forEach((f, i) => {
-              map.setFeatureState({ source: 'counties', id: i }, { hover: i === featureId });
+            locationName.textContent = 'Tap on a county';
+            repName.textContent = 'Find a Representative';
+            sidebarButton.style.display = 'none';
+            geojson?.features.forEach((f, i) => {
+              map.setFeatureState({ source: 'counties', id: i }, { hover: false });
             });
           }
-        });
-
-        map.on('mousemove', 'counties-fill', (e) => {
-          if (!isHoverEnabled || !map.getSource('counties') || !geojson) {
-            return;
-          }
-
-          map.getCanvas().style.cursor = 'pointer';
-          const feature = e.features[0];
-          updateCountyInfo(feature);
-
-          const geoId = currentRegion === 'us' ? feature.properties.ADM2_CODE : feature.properties.NAME;
-          const rep = currentRegion === 'us' ? repMap.get(geoId) || 'N/A' : regionReps[currentRegion];
-
-          if (currentRegion === 'us') {
-            repToCountyIds.forEach((ids, repKey) => {
-              ids.forEach(id => {
-                map.setFeatureState({ source: 'counties', id }, { hover: repKey === rep });
-              });
-            });
-          } else {
-            geojson.features.forEach((f, i) => {
-              map.setFeatureState({ source: 'counties', id: i }, { hover: true });
-            });
-          }
-        });
-
-        map.on('mouseleave', 'counties-fill', () => {
-          if (!isHoverEnabled) return;
-
-          map.getCanvas().style.cursor = '';
-          resetCountyInfo();
         });
       }
+
+      // Handle contact button click
+      sidebarButton.addEventListener('click', () => {
+        console.log(`Contact button clicked for ${locationName.textContent}, Rep: ${repName.textContent}`);
+        // Add your contact action here, e.g., open a form or redirect
+        alert(`Contacting representative: ${repName.textContent} for ${locationName.textContent}`);
+      });
     });
 
     document.getElementById('region-selector').addEventListener('change', (e) => {
@@ -627,24 +669,21 @@
       if (currentRegion !== 'canada') document.getElementById('canada-btn').classList.add('inactive');
       if (currentRegion !== 'caribbean') document.getElementById('caribbean-btn').classList.add('inactive');
 
+      // Reset map view with zoom limits
       map.setMinZoom(regionView[currentRegion].minZoom);
-      map.setMaxZoom(regionView[currentRegion].maxZoom);
-
-      // Validate center coordinates before jumping
-      const center = regionView[currentRegion].center;
-      if (center[1] < -90 || center[1] > 90) {
-        console.error(`Invalid latitude for region ${currentRegion}: ${center[1]}. Must be between -90 and 90.`);
-        return;
+      if (regionView[currentRegion].maxZoom) {
+        map.setMaxZoom(regionView[currentRegion].maxZoom);
+      } else {
+        map.setMaxZoom(20); // Default maxZoom for other regions
       }
-      if (center[0] < -180 || center[0] > 180) {
-        console.error(`Invalid longitude for region ${currentRegion}: ${center[0]}. Must be between -180 and 180.`);
-        return;
-      }
-
       map.jumpTo({
         center: regionView[currentRegion].center,
         zoom: regionView[currentRegion].zoom
       });
+
+      // Reset selection state
+      isHoverEnabled = true;
+      selectedCountyId = null;
 
       repToCountyIds.forEach((ids, rep) => {
         ids.forEach(id => {
@@ -664,9 +703,6 @@
       document.getElementById('location-name').textContent = isMobileDevice() ? 'Tap on a county' : 'Hover on your county';
       document.getElementById('rep-name').textContent = 'Find a Representative';
       document.getElementById('sidebar-button').style.display = 'none';
-
-      selectedCountyId = null;
-      isHoverEnabled = true;
 
       loadRegion(currentRegion);
     });
@@ -712,24 +748,13 @@
     function loadRegion(region) {
       repToCountyIds.clear();
 
-      const loadGeoJSON = geojsonCache.has(regionSources[region])
-        ? Promise.resolve(geojsonCache.get(regionSources[region]))
-        : fetch(regionSources[region])
-            .then(res => {
-              if (!res.ok) {
-                console.error(`Failed to fetch ${regionSources[region]}: ${res.status} ${res.statusText}`);
-                throw new Error(`Failed to fetch ${regionSources[region]}`);
-              }
-              return res.json();
-            })
-            .then(data => {
-              geojsonCache.set(regionSources[region], data);
-              return data;
-            });
-
-      loadGeoJSON
+      fetch(regionSources[region])
+        .then(res => {
+          if (!res.ok) throw new Error(`Failed to fetch ${regionSources[region]}`);
+          return res.json();
+        })
         .then((data) => {
-          geojson = JSON.parse(JSON.stringify(data)); // Deep copy to avoid mutating cached data
+          geojson = data;
           const bounds = new maplibregl.LngLatBounds();
 
           if (region === 'caribbean') {
@@ -747,7 +772,6 @@
 
             if (region === 'us') {
               try {
-                feature.geometry = transformCoordinates(feature.geometry, feature.properties.REGION_COD);
                 feature.geometry.coordinates = convertWebMercatorToWGS84(geometry.coordinates, geometry.type);
               } catch (err) {
                 console.warn(`Error converting coordinates for feature ${feature.properties.NAME || 'Unknown'}: ${err.message}`);
@@ -759,10 +783,6 @@
           });
 
           console.log(`Loading ${region} with ${geojson.features.length} features`);
-
-          if (geojson.features.length === 0) {
-            console.warn(`No features loaded for region ${region}. Check the GeoJSON data in ${regionSources[region]}.`);
-          }
 
           geojson.features.forEach((f, i) => {
             f.id = i;
@@ -824,22 +844,11 @@
           });
 
           if (region === 'us') {
-            const loadStates = geojsonCache.has('states.geojson')
-              ? Promise.resolve(geojsonCache.get('states.geojson'))
-              : fetch('states.geojson')
-                  .then(res => {
-                    if (!res.ok) {
-                      console.error(`Failed to fetch states.geojson: ${res.status} ${res.statusText}`);
-                      throw new Error('Failed to fetch states.geojson');
-                    }
-                    return res.json();
-                  })
-                  .then(data => {
-                    geojsonCache.set('states.geojson', data);
-                    return data;
-                  });
-
-            loadStates
+            fetch('states.geojson')
+              .then(res => {
+                if (!res.ok) throw new Error('Failed to fetch states.geojson');
+                return res.json();
+              })
               .then(stateGeojson => {
                 stateGeojson.features = stateGeojson.features.filter(feature => {
                   const statefp = feature.properties.STATEFP;
@@ -851,7 +860,6 @@
                   }
 
                   try {
-                    feature.geometry = transformCoordinates(feature.geometry, statefp);
                     feature.geometry.coordinates = convertWebMercatorToWGS84(geometry.coordinates, geometry.type);
                   } catch (err) {
                     console.warn(`Error converting coordinates for state ${feature.properties.NAME || 'Unknown'}: ${err.message}`);
@@ -883,32 +891,16 @@
                     'line-opacity': 1
                   }
                 });
-
-                addCountyLayers(region);
               })
               .catch(err => {
                 console.error('Error loading states.geojson:', err);
-                addCountyLayers(region);
               });
-          } else {
-            addCountyLayers(region);
           }
 
-          // Force map to render after adding layers
-          map.triggerRepaint();
+          addCountyLayers(region);
         })
         .catch(err => {
-          console.error(`Error loading region ${region}:`, err);
-          // Fallback to default region (us) if Canada fails to load
-          if (region !== 'us') {
-            console.warn(`Falling back to US region due to failure in loading ${region}`);
-            currentRegion = 'us';
-            loadRegion('us');
-            map.jumpTo({
-              center: regionView.us.center,
-              zoom: regionView.us.zoom
-            });
-          }
+          console.error('Error loading region:', err);
         });
     }
 
